@@ -48,6 +48,20 @@ spec:
         - name: kind
           value: task
         resolver: bundles
+    - name: slack-notif
+      params:
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+      - name: secret-name
+        value: slack-notif-test
+      - name: key-name
+        value: token
+      - name: message
+        value: "hey there"
+      - name: files
+        value: [Dockerfile, README.md]
+      taskRef:
+        name: slack-webhook-notification-oci-ta
     params:
     - description: Source Repository URL
       name: git-url
