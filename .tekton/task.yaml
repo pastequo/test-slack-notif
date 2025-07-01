@@ -1,16 +1,28 @@
+---
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
+  name: slack-webhook-notification-oci-ta
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: konflux
   labels:
     app.kubernetes.io/version: "0.1"
-  annotations:
-    tekton.dev/pipelines.minVersion: "0.12.1"
-    tekton.dev/tags: "konflux"
-  name: slack-webhook-notification-oci-ta
 spec:
-  description: >-
-    Sends message to slack using incoming webhook
+  description: Sends message to slack using incoming webhook
   params:
+    - name: SOURCE_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with
+        the application source code.
+      type: string
+    - name: files
+      description: List of file to dump. The content will be added to the
+        message.
+      type: array
+      default: []
+    - name: key-name
+      description: Key in the key in secret which contains webhook URL for
+        slack.
     - name: message
       description: Message to be sent
     - name: secret-name
@@ -18,48 +30,40 @@ spec:
         Secret with at least one key where value is webhook URL for slack.
         eg. oc create secret generic my-secret --from-literal team1=https://hooks.slack.com/services/XXX/XXXXXX --from-literal team2=https://hooks.slack.com/services/YYY/YYYYYY
       default: slack-webhook-notification-secret
-    - name: key-name
-      description: Key in the key in secret which contains webhook URL for slack.
     - name: submodules
+      description: List of submodules name to dump. Git log since previous
+        submodule commit will be added to the message. The previous submodule
+        commit is found by looking at the previous commit in the repository
+        that declares the submodules.
       type: array
-      description: List of submodules name to dump. Git log since previous submodule commit will be added to the message. The previous submodule commit is found by looking at the previous commit in the repository that declares the submodules.
       default: []
-    - name: files
-      type: array
-      description: List of file to dump. The content will be added to the message.
-      default: []
-    - name: SOURCE_ARTIFACT
-      description: The Trusted Artifact URI pointing to the artifact with
-        the application source code.
-      type: string
-  stepTemplate:
-    workingDir: /var/workdir/source
   volumes:
-    - name: workdir
-      emptyDir: {}
     - name: webhook-secret
       secret:
-        secretName: $(params.secret-name)
         optional: true
+        secretName: $(params.secret-name)
+    - name: workdir
+      emptyDir: {}
   steps:
     - name: use-trusted-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:4689f88dd253bd1feebf57f1a76a5a751880f739000719cd662bbdc76990a7fd
       args:
         - use
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
-      volumeMounts:
-        - mountPath: /var/workdir
-          name: workdir
     - name: send-message
       image: quay.io/konflux-ci/appstudio-utils:1610c1fc4cfc9c9053dbefc1146904a4df6659ef@sha256:90ac97b811073cb99a23232c15a08082b586c702b85da6200cf54ef505e3c50c
-      # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
-      # the cluster will set imagePullPolicy to IfNotPresent
+      args:
+        - --files
+        - $(params.files[*])
+        - --submodules
+        - $(params.submodules[*])
+      workingDir: /var/workdir/source
       volumeMounts:
+        - mountPath: /etc/secrets
+          name: webhook-secret
+          readOnly: true
         - mountPath: /var/workdir
           name: workdir
-        - name: webhook-secret
-          mountPath: "/etc/secrets"
-          readOnly: true
       env:
         - name: HOME
           value: /tekton/home
@@ -67,11 +71,6 @@ spec:
           value: $(params.key-name)
         - name: MESSAGE
           value: $(params.message)
-      args:
-        - --files
-        - $(params.files[*])
-        - --submodules
-        - $(params.submodules[*])
       script: |
         #!/usr/bin/env bash
 
@@ -80,7 +79,7 @@ spec:
         # ---------
 
         function concat {
-            cat << EOM
+          cat <<EOM
         $1
         $2
         EOM
@@ -97,7 +96,7 @@ spec:
         function dumpFile {
           filePath=$1
 
-          cat << EOM
+          cat <<EOM
         *${filePath}:*
         \`\`\`
         $(cat "${filePath}")
@@ -126,7 +125,7 @@ spec:
             commits=$(git -C "${path}" log --pretty=format:'%h %<(27,trunc)%an %s' --abbrev-commit "${previous_commit}".."${current_commit}")
           fi
 
-          cat << EOM
+          cat <<EOM
         *Submodule ${name} (<${url}/commits/${current_commit}|commits>):*
         \`\`\`
         ${commits}
@@ -180,21 +179,21 @@ spec:
         slack_message=${MESSAGE}
 
         if [ ${#FILES[@]} -ne 0 ]; then
-            slack_message=$(concat "${slack_message}" "$(dumpSeparator)")
+          slack_message=$(concat "${slack_message}" "$(dumpSeparator)")
         fi
 
         for file in "${FILES[@]}"; do
-            content=$(dumpFile "${file}")
-            slack_message=$(concat "${slack_message}" "${content}")
+          content=$(dumpFile "${file}")
+          slack_message=$(concat "${slack_message}" "${content}")
         done
 
         if [ ${#SUBMODULES[@]} -ne 0 ]; then
-            slack_message=$(concat "${slack_message}" "$(dumpSeparator)")
+          slack_message=$(concat "${slack_message}" "$(dumpSeparator)")
         fi
 
         for submodule in "${SUBMODULES[@]}"; do
-            content=$(dumpSubmodule "${submodule}")
-            slack_message=$(concat "${slack_message}" "${content}")
+          content=$(dumpSubmodule "${submodule}")
+          slack_message=$(concat "${slack_message}" "${content}")
         done
 
         data=$(jq --compact-output --null-input --arg message "$slack_message" '{text: $message}')

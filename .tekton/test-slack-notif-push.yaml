@@ -57,7 +57,7 @@ spec:
       - name: key-name
         value: token
       - name: message
-        value: "hey there"
+        value: "hey there again"
       - name: files
         value: [Dockerfile, README.md]
       taskRef:
